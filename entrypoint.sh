@@ -55,23 +55,15 @@ fi
 # we have to handle these steps ourselves.
 #
 
-# GCS will check for the existence of this file to make sure this is
-# a supported platform. Make it a fake so that we can handle service
-# launch ourselves.
-rm -f /bin/systemctl
-ln -s /bin/true /bin/systemctl
-
 # Put our deployment key into a file where 'node setup' can reach it
 deployment_key="/deployment-key.json"
-echo $DEPLOYMENT_KEY > $deployment_key
+echo "$DEPLOYMENT_KEY" > $deployment_key
 chmod 600 $deployment_key
 
-globus-connect-server node setup     \
-    --deployment-key $deployment_key \
-    $NODE_SETUP_ARGS
-
-if [ $? -ne 0 ]
-then
+# shellcheck disable=SC2086
+if ! globus-connect-server node setup \
+    --deployment-key "$deployment_key" \
+    $NODE_SETUP_ARGS; then
     echo "node setup failed. Exiting."
     exit 1
 fi
@@ -104,7 +96,7 @@ ln -s /run/gcs_manager/sock /run/gcs_manager.sock
 
 # Launch the service. See /lib/systemd/system/gcs_manager.service
 (
-    cd /opt/globus/share/web;
+    cd /opt/globus/share/web && exit 1
     runuser -u gcsweb -g gcsweb -- /opt/globus/bin/gunicorn \
         --workers 4                                   \
 	--preload api_app                             \
@@ -118,7 +110,7 @@ while [ ! -f /run/gcs_manager/pid ]
 do
     sleep 0.5
 done
-gcs_manager_pid=`cat /run/gcs_manager/pid`
+gcs_manager_pid=$(cat /run/gcs_manager/pid)
 
 # Now change ownership of the socket so that apache can use it.
 # See /lib/systemd/system/gcs_manager.socket
@@ -170,7 +162,7 @@ while [ ! -f $pidfile ]
 do
     sleep 0.5
 done
-httpd_pid=`cat $pidfile`
+httpd_pid=$(cat $pidfile)
 
 ###
 ### Launch GridFTP
@@ -187,7 +179,8 @@ while [ ! -f /run/globus-gridftp-server.pid ]
 do
     sleep 0.5
 done
-gridftp_pid=`cat /run/globus-gridftp-server.pid`
+gridftp_pid=$(cat /run/globus-gridftp-server.pid)
+export gridftp_pid
 
 
 ###############################################################################
@@ -196,18 +189,15 @@ gridftp_pid=`cat /run/globus-gridftp-server.pid`
 
 function is_process_alive()
 {
-    kill -0 $1 > /dev/null 2>&1
+    kill -0 "$1" > /dev/null 2>&1
 }
 
-function check_process()
-{
+function check_process() {
     # $1 - Name
     # $2 - PID
 
-    is_process_alive $2
-    if [ $? -ne 0 ]
-    then
-        echo "$1 exitted unexpectedly"
+    if ! is_process_alive "$2"; then
+        echo "$1 exited unexpectedly"
         return 1
     fi
     return 0
@@ -222,17 +212,17 @@ function cleanup()
     trap - EXIT
 
     shutdown_gcs_manager=0
-    is_process_alive $gcs_manager_pid && shutdown_gcs_manager=1
+    is_process_alive "$gcs_manager_pid" && shutdown_gcs_manager=1
     if [ $shutdown_gcs_manager -eq 1 ]
     then
         echo "Terminating GCS Manager (pid $gcs_manager_pid)"
-        kill -TERM $gcs_manager_pid
+        kill -TERM "$gcs_manager_pid"
 
         first_pass=1
         while :
         do
-            is_process_alive $gcs_manager_pid && break
-	    (($first_pass)) && echo "Waiting on GCS Manager to exit"
+            is_process_alive "$gcs_manager_pid" && break
+	    ((first_pass)) && echo "Waiting on GCS Manager to exit"
 	    first_pass=0
         done
         echo "GCS Manager has exitted"
@@ -254,9 +244,9 @@ trap '' INT
 echo "GCS container successfully deployed"
 while [ $shutting_down -eq 0 ]
 do
-    check_process "Apache httpd" $httpd_pid || shutting_down=1
-    check_process "GCS Manager" $gcs_manager_pid || shutting_down=1
-    check_process "GCS Manager Assistant" $gcs_manager_assistant_pid || shutting_down=1
+    check_process "Apache httpd" "$httpd_pid" || shutting_down=1
+    check_process "GCS Manager" "$gcs_manager_pid" || shutting_down=1
+    check_process "GCS Manager Assistant" "$gcs_manager_assistant_pid" || shutting_down=1
 
     if [ $shutting_down -eq 1 ]
     then
